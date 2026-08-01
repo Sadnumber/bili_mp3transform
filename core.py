@@ -447,16 +447,36 @@ def process(cache_dir, output_dir, mode='audio', bitrate='192k',
 # ---------------------------------------------------------------- 缓存目录猜测
 
 def guess_cache_dirs():
-    """猜测常见的 B 站客户端缓存目录，返回存在的路径列表。"""
+    """猜测常见的 B 站客户端缓存目录，返回存在的路径列表。
+
+    覆盖以下情况：
+    - 当前用户目录下的 Videos/Bilibili、Documents/bilibili
+    - 与各盘符下「<用户名>/Videos/bilibili」（B 站默认缓存常装在非系统盘，
+      如 D:\\RuanYancheng\\Videos\\bilibili）
+    - 常见的 C:\\bilibili\\download、Users\\Public\\Videos\\bilibili
+    """
     guesses = []
     userprofile = os.environ.get('USERPROFILE', '')
+    username = os.environ.get('USERNAME', '')
     if userprofile:
         guesses += [
             os.path.join(userprofile, 'Videos', 'bilibili'),
             os.path.join(userprofile, 'Videos', 'Bilibili'),
             os.path.join(userprofile, 'Documents', 'bilibili'),
         ]
-    for drive in 'CDEFG':
+    for drive in 'CDEFGH':
+        if username:
+            guesses.append(f'{drive}:\\{username}\\Videos\\bilibili')
+            guesses.append(f'{drive}:\\{username}\\Videos\\Bilibili')
         guesses.append(f'{drive}:\\bilibili\\download')
         guesses.append(f'{drive}:\\Users\\Public\\Videos\\bilibili')
-    return [g for g in guesses if os.path.isdir(g)]
+    # 去重并保留存在者
+    seen = set()
+    result = []
+    for g in guesses:
+        if g in seen:
+            continue
+        seen.add(g)
+        if os.path.isdir(g):
+            result.append(g)
+    return result
