@@ -1,71 +1,91 @@
 # bili_mp3transform
-将 b站客户端下载的 m4s 文件（音频流/视频流）解密并转换为可播放的 m4a / mp4，最终合并为完整 mp4 视频。
 
-## 工作原理
-- b站的“加密”很简单：在 m4s 文件开头放入 9 个 `0` 字节，删除即可还原为标准 MP4 容器。
-- 音频流文件名含 `-30280`，解密后为 AAC 编码（用 `.m4a` 后缀更准确）。
-- 视频流文件名含 `-30080`，解密后为 H.264 编码（`.mp4`）。
-- 用 `ffmpeg` 将视频 mp4 与音频 m4a 封装合并，得到带声音的完整 mp4（仅封装，不重新编码，无损且快速）。
+将 B 站客户端下载的 m4s 缓存文件解密并转换为可播放的 **MP3 音频** 或 **带声音的完整 MP4 视频**。
 
-## 文件说明
-- `utils.py`：公共工具。读取视频文件夹下 `videoInfo.json` 的 `title` 作为安全文件夹名；提供默认 output 路径。
-- `main.py`：从 b站缓存目录递归筛选 `.m4s` 文件，按每个视频的 `title` 在 `output/` 下建立同名文件夹，并将该视频的 m4s 复制进去。
-- `test.py`：将 `output/` 中的音频 m4s（`-30280`）解密转为 `.m4a`。默认就地输出到原文件夹。
-- `video.py`：将视频 m4s（`-30080`）解密转为 `.mp4`。默认就地输出到原文件夹。
-- `merge.py`：递归扫描 `output/`，将每个标题文件夹内的视频 mp4 与音频 m4a 合并为 `<标题>.mp4`。
-- `to_mp3.py`：将每个标题文件夹内的 `.m4a` 音频用 `ffmpeg` 真正重编码为 MP3（libmp3lame），输出为 `<标题>.mp3`。
+提供开箱即用的 Windows 图形界面程序（单文件 exe，内置 Python 运行时与 ffmpeg，**无需安装任何环境**），同时保留原有的命令行脚本。
 
-## 命令行用法
-所有脚本的目标目录默认值均为项目内的 `output/` 文件夹，因此可以几乎零参数运行。
+## 一、图形界面（推荐）
 
-### 1. main.py 提取并归类
+### 获取程序
+打包后的 `dist/B站缓存转换器.exe` 为单文件绿色程序，约 38 MB，可直接拷贝到任意 Windows 10 / 11 (x64) 电脑运行。
+
+### 使用步骤
+1. 双击 `B站缓存转换器.exe`。
+2. 首次使用设置：
+   - **B站缓存目录**（必选）：B 站客户端「设置 → 下载设置」中查看的缓存路径，程序会自动尝试猜测常见位置。
+   - **输出目录**（可选）：默认为桌面的「B站转换输出」文件夹。
+   - **MP3 码率**（可选）：128k / 192k / 256k / 320k，默认 192k。
+   - **完成后删除中间文件**（可选）：只保留最终的 mp3 / mp4。
+   - **完成后打开输出目录**（可选）。
+3. 点击对应按钮即可：
+   - **转换为音频 (MP3)** —— 提取音频流并重编码为 MP3。
+   - **转换为完整视频 (MP4)** —— 合并音视频流为带声音的 MP4（仅封装，不重编码，无损且快速）。
+
+所有设置会自动保存到 `%APPDATA%\BiliCacheConverter\config.json`，下次打开无需重复配置。
+
+程序不会修改原始缓存：处理前会先把缓存复制到输出目录再操作。
+
+## 二、自行打包 exe
+
+环境要求：Windows + Python 3.8 及以上。
+
 ```bash
-python main.py -s /path/to/bilibili_cache
+python build.py
 ```
-- `-s / --source`：b站缓存起始目录（必填）
-- `-t / --target`：目标根目录，默认项目内 `output/`
-- `-p / --pattern`：文件名匹配模式，默认空=复制所有 `.m4s`（音频+视频）
 
-### 2. test.py 转音频 m4a
+脚本会自动完成：
+1. 安装 PyInstaller（若未安装）。
+2. 下载精简版 ffmpeg 到 `bin/ffmpeg.exe`（已存在则复用）。
+3. 调用 PyInstaller 打包为单文件 exe，输出到 `dist/`。
+
+可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--ffmpeg <路径>` | 使用本机已有的 ffmpeg.exe，跳过下载 |
+| `--onedir` | 打包为目录而非单文件（启动更快，体积略大） |
+
+若网络受限导致下载失败，可手动下载 ffmpeg 并将 `ffmpeg.exe` 放到项目的 `bin/` 目录后再运行 `python build.py`。
+
+## 三、工作原理
+
+- B 站的“加密”很简单：在 m4s 文件开头放入 9 个 `0` 字节，删除即可还原为标准 MP4 容器。
+- 音频流文件名通常含 `-30280`（也可能是 `-30216` / `-30232` / `-30250` 等 `302xx` 编号），解密后为 AAC 编码。
+- 视频流文件名通常含 `-30080`（`300xx` 编号），解密后为 H.264 / HEVC 编码。
+- 若编号无法识别，程序会按文件体积自动判断（最大者为视频，最小者为音频）。
+- 视频标题读取自缓存目录中的 `videoInfo.json`，并兼容旧版客户端的 `entry.json`。
+
+## 四、文件说明
+
+| 文件 | 说明 |
+| --- | --- |
+| `app.py` | 图形界面主程序（tkinter，无第三方依赖） |
+| `core.py` | 核心逻辑：ffmpeg 定位、缓存扫描、解密、转 MP3、合并 MP4 |
+| `build.py` | 一键打包脚本 |
+| `utils.py` | 旧版命令行脚本共用的工具函数 |
+| `main.py` | 命令行：从缓存目录筛选 m4s 并按标题归类到 `output/` |
+| `test.py` | 命令行：将音频 m4s（`-30280`）解密为 `.m4a` |
+| `video.py` | 命令行：将视频 m4s（`-30080`）解密为 `.mp4` |
+| `to_mp3.py` | 命令行：将 `.m4a` 用 ffmpeg 重编码为 `.mp3` |
+| `merge.py` | 命令行：将 mp4 与 m4a 合并为完整 mp4 |
+
+## 五、命令行用法（旧流程）
+
+所有脚本的目标目录默认值均为项目内的 `output/` 文件夹。
+
 ```bash
-python test.py            # 默认处理 output/ 内所有音频流
+python main.py -s /path/to/bilibili_cache   # 提取并按标题归类
+python test.py                              # 音频 m4s -> m4a
+python video.py                             # 视频 m4s -> mp4
+python to_mp3.py                            # m4a -> mp3（-b 指定码率）
+python merge.py                             # 合并为完整 mp4
 ```
-- `-i / --input`：输入目录，默认 `output/`
-- `-o / --output`：可选输出根目录（保留子目录结构），默认就地输出
-- `-p / --pattern`：默认 `-30280`
 
-### 3. video.py 转视频 mp4
-```bash
-python video.py           # 默认处理 output/ 内所有视频流
-```
-- 参数同 test.py，默认 pattern `-30080`
+主要参数：
 
-### 4. merge.py 合并为完整 mp4
-```bash
-python merge.py           # 默认递归处理 output/ 内各标题文件夹
-```
-- `-i / --input`：输入根目录，默认 `output/`
+- `main.py`：`-s` 缓存目录（必填）、`-t` 目标目录、`-p` 文件名匹配模式
+- `test.py` / `video.py`：`-i` 输入目录、`-o` 输出根目录、`-p` 匹配模式
+- `to_mp3.py`：`-i` 输入目录、`-b` 码率（默认 `192k`）
+- `merge.py`：`-i` 输入目录
 
-### 5. to_mp3.py 将 m4a 重编码为 mp3
-```bash
-python to_mp3.py          # 默认递归处理 output/ 内各标题文件夹
-```
-- `-i / --input`：输入根目录，默认 `output/`
-- `-b / --bitrate`：MP3 码率，默认 `192k`（可选 `128k` / `320k`）
-
-## 完整示例（使用默认 output 目录）
-```bash
-python main.py -s /Users/ruanyancheng/Movies/bilibili
-python test.py
-python video.py
-python to_mp3.py
-python merge.py
-```
-执行后 `output/《原神》7.0版本PV：「无神怜爱的雪国」/` 下会包含：
-- `*.m4s`（原始，可手动删除）
-- `*-30280.m4a`（音频，AAC）
-- `*-30080.mp4`（视频）
-- `《原神》7.0版本PV：「无神怜爱的雪国」.mp3`（音频，MP3 编码）
-- `《原神》7.0版本PV：「无神怜爱的雪国」.mp4`（最终合并视频，可直接播放）
-
-> 合并步骤依赖 `ffmpeg`，请先通过 `brew install ffmpeg`（macOS）或对应包管理器安装。
+> 命令行流程依赖系统已安装 `ffmpeg`；图形界面版本已内置 ffmpeg，无此要求。

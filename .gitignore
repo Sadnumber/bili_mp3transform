@@ -1,15 +1,15 @@
-# Python 缓存
 __pycache__/
-*.pyc
+*.py[cod]
 
-# 系统文件
-.DS_Store
-
-# 运行产物（提取/转换结果，含用户缓存）
+# 打包产物与依赖
+build/
+dist/
+bin/
+*.spec
 output/
+
+# 媒体文件
 *.m4s
 *.m4a
+*.mp3
 *.mp4
-
-# 可能随包分发的第三方二进制
-ffmpeg_bin/
