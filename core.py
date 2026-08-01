@@ -230,19 +230,30 @@ def _probe_m4s(directory, filename):
             pass
 
 
+# 音视频流默认编号：B 站标准清晰度下音频流多为 -30280，视频流多为 -30080 / -100050
+DEFAULT_AUDIO = '-30280'
+DEFAULT_VIDEO = ('-30080', '-100050')
+
+
+def _name_has(path, token):
+    """文件名（取扩展名前的末段）是否包含某编号，如 '1-1-30280.m4s' 含 '-30280'。"""
+    base = os.path.basename(path)
+    stem = os.path.splitext(base)[0]
+    return token in stem
+
+
 def _pick_streams(directory, verify=True):
     """
     在目录中区分音频流与视频流 m4s，返回 (音频文件名, 视频文件名)。
 
-    判定策略（按优先级）：
-    1. **文件体积**：同一视频的两条流中，视频流体积总是明显大于音频流。
-       B 站的清晰度编号并不固定（视频流除 300xx 外还有 AV1 的 100xx 等，
-       音频流有 30216/30232/30280/30250 杜比等），仅靠编号匹配会误判。
-    2. 体积相差不足 10% 时，用编号作为辅助判断。
-    3. verify=True 时用 ffmpeg 探测实际轨道类型校正结果，
-       确保选出的流确实含有对应轨道（体积和编号都只是猜测）。
-
-    只有一个 m4s 时无法凭体积区分，交由探测决定其类型。
+    判定策略（按优先级，编号优先于体积，符合 B 站常见命名）：
+    1. **音频流**：默认找文件名含 `-30280` 的文件；若找不到，
+       则取文件夹内**体积更小**的 m4s（更大的大概率是视频流）。
+    2. **视频流**：默认找文件名含 `-30080` 或 `-100050` 的文件；若找不到，
+       则取文件夹内**体积更大**的 m4s。
+    3. 仅有一个 m4s 时无法凭体积区分，交由 ffmpeg 探测决定其类型。
+    4. verify=True 时用 ffmpeg 探测实际轨道类型做最终校正，
+       确保选出的流确实含有对应轨道（编号/体积都只是启发式猜测）。
     """
     m4s = [f for f in sorted(os.listdir(directory)) if f.lower().endswith('.m4s')]
     if not m4s:
@@ -257,29 +268,40 @@ def _pick_streams(directory, verify=True):
                         only if 'video' in kinds else None)
         return only, only
 
-    # 按体积升序：最小者为音频，最大者为视频
-    ordered = sorted(m4s, key=lambda f: os.path.getsize(os.path.join(directory, f)))
-    audio, video = ordered[0], ordered[-1]
+    # 按体积排序，便于回退到大小判断
+    by_size = sorted(m4s, key=lambda f: os.path.getsize(os.path.join(directory, f)))
+    smallest, largest = by_size[0], by_size[-1]
 
-    # 体积过于接近（相差不足 10%）时说明无法凭大小可靠区分，改用编号辅助判断
-    size_a = os.path.getsize(os.path.join(directory, audio))
-    size_v = os.path.getsize(os.path.join(directory, video))
-    if size_v > 0 and (size_v - size_a) / size_v < 0.10:
-        by_num_a = next((f for f in m4s if '-302' in f), None)
-        by_num_v = next((f for f in m4s if '-300' in f or '-100' in f), None)
-        if by_num_a and by_num_v and by_num_a != by_num_v:
-            audio, video = by_num_a, by_num_v
+    # 1) 音频：默认 -30280，找不到取体积最小的
+    audio = next((f for f in m4s if _name_has(f, DEFAULT_AUDIO)), None)
+    if audio is None:
+        audio = smallest
+
+    # 2) 视频：默认 -30080 或 -100050，找不到取体积最大的
+    video = next((f for f in m4s if any(_name_has(f, t) for t in DEFAULT_VIDEO)), None)
+    if video is None:
+        video = largest
+
+    # 防御：音频和视频不能选到同一个文件（除非只有一个流，上面已处理）。
+    # 当默认编号都命中同一文件、或回退恰好撞车，优先保证视频取最大、音频取最小。
+    if audio == video:
+        if audio != largest and largest != video:
+            video = largest
+        elif audio != smallest and smallest != audio:
+            audio = smallest
+        else:
+            # 实在无法区分，维持体积主从关系：最大为视频，最小为音频
+            audio, video = smallest, largest
 
     if not verify:
         return audio, video
 
-    # 用实际轨道类型校正：体积/编号都只是启发式猜测，探测结果才是事实
+    # 3) 用实际轨道类型校正：编号/体积都只是启发式猜测，探测结果才是事实
     real_audio = real_video = None
     for f in m4s:
         kinds = _probe_m4s(directory, f)
         if not kinds:
             continue
-        # 纯音频流优先作为音频；含视频轨的作为视频
         if 'video' in kinds and real_video is None:
             real_video = f
         elif 'audio' in kinds and 'video' not in kinds and real_audio is None:
