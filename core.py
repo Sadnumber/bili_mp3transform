@@ -9,9 +9,6 @@ import json
 import shutil
 import subprocess
 
-AUDIO_PATTERN = '-30280'
-VIDEO_PATTERN = '-30080'
-
 # Windows 下隐藏 ffmpeg 子进程黑窗
 _CREATE_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
@@ -190,27 +187,106 @@ def decrypt_dir(directory, pattern, new_ext, log=_noop):
     return out
 
 
-def _pick_streams(directory):
+def probe_kinds(path):
     """
-    在目录中区分音频流与视频流 m4s。
-    B 站音频流常见编号 302xx（30280/30216/30232/30250 等），视频流为 300xx。
-    若无法通过编号判断，则按文件体积：最大的为视频，最小的为音频。
+    用 ffmpeg 探测文件实际包含的轨道类型，返回集合，如 {'video'}、{'audio'}。
+    探测失败返回空集合。传入的应是已去除前导 0 的标准容器文件。
+    """
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return set()
+    try:
+        r = subprocess.run(
+            [ffmpeg, '-hide_banner', '-i', path],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            creationflags=_CREATE_NO_WINDOW,
+        )
+    except OSError:
+        return set()
+    kinds = set()
+    for line in r.stderr.splitlines():
+        if 'Stream #' not in line:
+            continue
+        if ': Video:' in line:
+            kinds.add('video')
+        elif ': Audio:' in line:
+            kinds.add('audio')
+    return kinds
+
+
+def _probe_m4s(directory, filename):
+    """把 m4s 去头到临时文件后探测其轨道类型。"""
+    src = os.path.join(directory, filename)
+    tmp = os.path.join(directory, f'.probe_{filename}.tmp')
+    try:
+        strip_header(src, tmp)
+        return probe_kinds(tmp)
+    except OSError:
+        return set()
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _pick_streams(directory, verify=True):
+    """
+    在目录中区分音频流与视频流 m4s，返回 (音频文件名, 视频文件名)。
+
+    判定策略（按优先级）：
+    1. **文件体积**：同一视频的两条流中，视频流体积总是明显大于音频流。
+       B 站的清晰度编号并不固定（视频流除 300xx 外还有 AV1 的 100xx 等，
+       音频流有 30216/30232/30280/30250 杜比等），仅靠编号匹配会误判。
+    2. 体积相差不足 10% 时，用编号作为辅助判断。
+    3. verify=True 时用 ffmpeg 探测实际轨道类型校正结果，
+       确保选出的流确实含有对应轨道（体积和编号都只是猜测）。
+
+    只有一个 m4s 时无法凭体积区分，交由探测决定其类型。
     """
     m4s = [f for f in sorted(os.listdir(directory)) if f.lower().endswith('.m4s')]
     if not m4s:
         return None, None
-    audio = [f for f in m4s if '-302' in f or '-3025' in f or AUDIO_PATTERN in f]
-    video = [f for f in m4s if '-300' in f or VIDEO_PATTERN in f]
-    if not audio or not video:
-        if len(m4s) >= 2:
-            ordered = sorted(m4s, key=lambda f: os.path.getsize(os.path.join(directory, f)))
-            audio = audio or [ordered[0]]
-            video = video or [ordered[-1]]
-        elif len(m4s) == 1:
-            # 只有一个流，交由调用方按需求处理
-            audio = audio or m4s
-            video = video or m4s
-    return (audio[0] if audio else None), (video[0] if video else None)
+
+    if len(m4s) == 1:
+        only = m4s[0]
+        if verify:
+            kinds = _probe_m4s(directory, only)
+            if kinds:
+                return (only if 'audio' in kinds else None,
+                        only if 'video' in kinds else None)
+        return only, only
+
+    # 按体积升序：最小者为音频，最大者为视频
+    ordered = sorted(m4s, key=lambda f: os.path.getsize(os.path.join(directory, f)))
+    audio, video = ordered[0], ordered[-1]
+
+    # 体积过于接近（相差不足 10%）时说明无法凭大小可靠区分，改用编号辅助判断
+    size_a = os.path.getsize(os.path.join(directory, audio))
+    size_v = os.path.getsize(os.path.join(directory, video))
+    if size_v > 0 and (size_v - size_a) / size_v < 0.10:
+        by_num_a = next((f for f in m4s if '-302' in f), None)
+        by_num_v = next((f for f in m4s if '-300' in f or '-100' in f), None)
+        if by_num_a and by_num_v and by_num_a != by_num_v:
+            audio, video = by_num_a, by_num_v
+
+    if not verify:
+        return audio, video
+
+    # 用实际轨道类型校正：体积/编号都只是启发式猜测，探测结果才是事实
+    real_audio = real_video = None
+    for f in m4s:
+        kinds = _probe_m4s(directory, f)
+        if not kinds:
+            continue
+        # 纯音频流优先作为音频；含视频轨的作为视频
+        if 'video' in kinds and real_video is None:
+            real_video = f
+        elif 'audio' in kinds and 'video' not in kinds and real_audio is None:
+            real_audio = f
+    if real_audio or real_video:
+        return real_audio or audio, real_video or video
+    return audio, video
 
 
 def to_mp3(directory, title, bitrate='192k', log=_noop):
@@ -219,6 +295,7 @@ def to_mp3(directory, title, bitrate='192k', log=_noop):
     if not audio_m4s:
         log('  未找到音频流，跳过')
         return None
+    log(f'  音频流: {audio_m4s}')
     m4a = os.path.join(directory, os.path.splitext(audio_m4s)[0] + '.m4a')
     strip_header(os.path.join(directory, audio_m4s), m4a)
     out_path = os.path.join(directory, safe_filename(title) + '.mp3')
@@ -239,6 +316,7 @@ def to_full_video(directory, title, log=_noop):
     if not video_m4s:
         log('  未找到视频流，跳过')
         return None
+    log(f'  视频流: {video_m4s}' + (f'  音频流: {audio_m4s}' if audio_m4s else ''))
     video_mp4 = os.path.join(directory, os.path.splitext(video_m4s)[0] + '.video.mp4')
     strip_header(os.path.join(directory, video_m4s), video_mp4)
 
