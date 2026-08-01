@@ -72,7 +72,7 @@ python build.py
 | `sound.py` | 命令行：将音频 m4s（`-30280`）解密为 `.m4a` |
 | `video.py` | 命令行：将视频 m4s（`-30080`）解密为 `.mp4` |
 | `to_mp3.py` | 命令行：将 `.m4a` 用 ffmpeg 重编码为 `.mp3` |
-| `merge.py` | 命令行：将 mp4 与 m4a 合并为完整 mp4 |
+| `video.py` | 命令行：将 m4s 音视频流解密并合并为带音频的完整 mp4 |
 
 ## 五、命令行用法（旧流程）
 
@@ -83,14 +83,13 @@ python main.py -s /path/to/bilibili_cache   # 提取并按标题归类
 python sound.py                             # 音频 m4s -> m4a
 python video.py                             # 视频 m4s -> mp4
 python to_mp3.py                            # m4a -> mp3（-b 指定码率）
-python merge.py                             # 合并为完整 mp4
+python video.py                             # m4s -> 带音频的完整 mp4
 ```
 
 主要参数：
 
 - `main.py`：`-s` 缓存目录（必填）、`-t` 目标目录、`-p` 文件名匹配模式
-- `sound.py` / `video.py`：`-i` 输入目录、`-o` 输出根目录、`-p` 匹配模式
+- `sound.py` / `video.py`：`-i` 输入目录、`-o` 输出根目录、`--clean` 清理中间文件
 - `to_mp3.py`：`-i` 输入目录、`-b` 码率（默认 `192k`）
-- `merge.py`：`-i` 输入目录
 
 > 命令行流程依赖系统已安装 `ffmpeg`；图形界面版本已内置 ffmpeg，无此要求。
