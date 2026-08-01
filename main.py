@@ -1,51 +1,52 @@
 import os
 import shutil
+import argparse
+from utils import find_title, default_output
 
 
-def find_and_copy_files(start_dir, target_dir, search_pattern):
+def find_and_copy_files(start_dir, target_root, search_pattern):
     """
-    遍历start_dir目录及其子目录，查找文件名中包含search_pattern的.m4s文件，
-    并将它们复制到target_dir目录中。
-
-    :param start_dir: 起始目录的路径
-    :param target_dir: 目标目录的路径
-    :param search_pattern: 要搜索的文件名中的模式
+    遍历 start_dir，对每个包含 .m4s 文件的子目录：
+    读取其 videoInfo.json 的 title，在 target_root 下建立同名文件夹，
+    将该目录中匹配 search_pattern 的 .m4s 文件复制进去。
     """
-    # 确保目标目录存在，如果不存在则创建它
-    if not os.path.exists(target_dir):
-        os.makedirs(target_dir)
-
-        # 遍历目录及其子目录
+    copied = 0
     for root, dirs, files in os.walk(start_dir):
-        for file in files:
-            # 检查文件名是否包含指定模式和是否为.m4s文件
-            if search_pattern in file and file.endswith('.m4s'):
-                # 构建文件的完整路径
-                source_path = os.path.join(root, file)
-                # 构建目标文件的路径
-                # 这里简单地将文件名添加到目标目录中，你也可以根据需要添加更复杂的命名规则
-                dest_path = os.path.join(target_dir, file)
-                # 复制文件
-                shutil.copy(source_path, dest_path)
-                print(f"已复制 {source_path} 到 {dest_path}")
+        m4s_files = [f for f in files if f.endswith('.m4s') and search_pattern in f]
+        if not m4s_files:
+            continue
+        title = find_title(root)
+        out_dir = os.path.join(target_root, title)
+        os.makedirs(out_dir, exist_ok=True)
+        for f in m4s_files:
+            src = os.path.join(root, f)
+            dst = os.path.join(out_dir, f)
+            shutil.copy(src, dst)
+            print(f"已复制 {src} -> {dst}")
+            copied += 1
+    return copied
 
-            # 示例用法
-def remove_leading_zeros(file_path, file_path1):
-    # 读取文件内容
-    with open(file_path, 'rb') as file:
-        data = file.read()
 
-    # 找到需要去除的部分
-    if data.startswith(b'000000000'):
-        data = data[9:]  # 删除前9个"0"
+def main():
+    parser = argparse.ArgumentParser(
+        description='从 b站缓存目录筛选 m4s 文件，按视频标题归类到 output 目录。'
+    )
+    parser.add_argument(
+        '-s', '--source', required=True,
+        help='b站缓存起始目录，代码自动遍历其所有子目录'
+    )
+    parser.add_argument(
+        '-t', '--target', default=default_output(),
+        help='目标根目录，默认项目内的 output 文件夹'
+    )
+    parser.add_argument(
+        '-p', '--pattern', default='',
+        help='文件名匹配模式，默认空=复制所有 .m4s（音频+视频）'
+    )
+    args = parser.parse_args()
+    n = find_and_copy_files(args.source, args.target, args.pattern)
+    print(f"完成：共复制 {n} 个文件到 {args.target}")
 
-    # 将修改后的内容写回文件
-    with open(file_path1, 'wb') as file:
-        file.write(data)
 
-if __name__ == "__main__":
-    start_directory = 'D:/RuanYancheng/Videos/bilibili'  # 替换为你的起始目录路径
-    target_directory = 'D:/m4smp3/m4s'  # 替换为你的目标目录路径
-    search_pattern = '-30280'  # 你要搜索的文件名中的模式
-    find_and_copy_files(start_directory, target_directory, search_pattern)
-
+if __name__ == '__main__':
+    main()
